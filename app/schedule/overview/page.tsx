@@ -59,6 +59,8 @@ export default function ScheduleOverviewPage() {
   const [answers, setAnswers] = useState<Answers>({});
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [myMember, setMyMember] = useState<Member | null>(null);
+  const [isGuest, setIsGuest] = useState(false);
+  const [needsRegistration, setNeedsRegistration] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -74,6 +76,7 @@ export default function ScheduleOverviewPage() {
   const monthIndex = month.getMonth();
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   const isAdmin = myMember?.is_admin === true;
+  const canView = Boolean(myMember) || isGuest;
 
   useEffect(() => {
     const now = new Date();
@@ -110,8 +113,25 @@ export default function ScheduleOverviewPage() {
           (m) => m.user_id === authData.user.id
         );
 
+        let guest = false;
         if (!mine) {
-          throw new Error("固定メンバーとして登録されていません。");
+          const { data: guestData, error: guestError } = await supabase
+            .from("static_guests")
+            .select("user_id")
+            .eq("user_id", authData.user.id)
+            .maybeSingle();
+          if (guestError) throw guestError;
+          guest = Boolean(guestData);
+          if (!guest) {
+            if (active) {
+              setNeedsRegistration(true);
+              setIsGuest(false);
+              setMyMember(null);
+              setAnswers({});
+              setEvents([]);
+            }
+            return;
+          }
         }
 
         const start = dateString(year, monthIndex, 1);
@@ -145,12 +165,16 @@ export default function ScheduleOverviewPage() {
           }
         }
 
-        setMyMember(mine);
+        setMyMember(mine ?? null);
+        setIsGuest(guest);
+        setNeedsRegistration(false);
         setAnswers(next);
         setEvents((eventResult.data ?? []) as ActivityEvent[]);
       } catch (err) {
         if (active) {
           setMyMember(null);
+          setIsGuest(false);
+          setNeedsRegistration(false);
           setAnswers({});
           setEvents([]);
           setError(
@@ -205,6 +229,7 @@ export default function ScheduleOverviewPage() {
   }
 
   function openDialog(day: number) {
+    if (!isAdmin || loading || saving) return;
     const event = getEvent(day);
     setEditTitle(event?.title ?? "固定活動");
     setEditStart(event?.start_time.slice(0, 5) ?? "21:30");
@@ -326,7 +351,7 @@ export default function ScheduleOverviewPage() {
               href="/schedule"
               className="inline-flex min-h-12 items-center justify-center rounded-xl bg-cyan-600 px-5 py-3 text-center font-bold hover:bg-cyan-500"
             >
-              ← 日程を入力・編集する
+              {isGuest ? "← 日程調整を閲覧する" : "← 日程を入力・編集する"}
             </a>
           </div>
         </header>
@@ -356,7 +381,7 @@ export default function ScheduleOverviewPage() {
             </button>
           </div>
 
-          {!loading && myMember && (
+          {!loading && canView && (
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <div className="rounded-lg bg-emerald-950/30 p-4 text-center">
                 <p className="text-sm text-slate-300">
@@ -391,13 +416,27 @@ export default function ScheduleOverviewPage() {
           </div>
         )}
 
+        {!loading && isGuest && !error && (
+          <div className="rounded-xl border border-cyan-800 bg-cyan-950/30 p-4 text-sm text-cyan-200">
+            ゲストとして閲覧中です。回答や活動予定の変更はできません。
+          </div>
+        )}
+
+        {!loading && needsRegistration && !error && (
+          <div className="rounded-xl border border-amber-800 bg-amber-950/30 p-5 text-amber-100">
+            <p className="font-bold">初回登録が必要です</p>
+            <p className="mt-2 text-sm">固定メンバーまたはゲストとして登録すると、回答一覧を閲覧できます。</p>
+            <a href="/profile" className="mt-4 inline-block rounded-lg bg-cyan-600 px-4 py-3 font-bold text-white hover:bg-cyan-500">プロフィールで登録する →</a>
+          </div>
+        )}
+
         {notice && (
           <div role="status" className="rounded-lg border border-emerald-800 bg-emerald-950/30 p-4 text-emerald-300">
             {notice}
           </div>
         )}
 
-        {!loading && myMember && (
+        {!loading && canView && (
           <>
             {/* PC版：一覧表 */}
             <section className="hidden overflow-x-auto rounded-xl border border-slate-800 bg-slate-900 md:block">

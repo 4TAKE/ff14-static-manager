@@ -80,6 +80,7 @@ export default function Home() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
+  const [access, setAccess] = useState<"loading" | "member" | "guest" | "unregistered" | "signed-out">("loading");
   useEffect(() => {
     let active = true;
     async function loadActivities() {
@@ -93,14 +94,35 @@ export default function Home() {
           setAuthLoading(false);
         }
         if (authError || !authData.user) {
+          if (active) setAccess("signed-out");
           throw new Error("Discordでログインしてください。");
         }
+        // 登録済み固定メンバーか、閲覧専用ゲストかを判定する。
         const { data: memberData, error: memberError } = await supabase
           .from("static_members")
-          .select("id, user_id");
+          .select("id")
+          .eq("user_id", authData.user.id)
+          .limit(1);
         if (memberError) throw memberError;
-        if (!(memberData ?? []).some((member) => member.user_id === authData.user.id)) {
-          throw new Error("固定メンバーとして登録されていません。");
+        let currentAccess: "member" | "guest" | "unregistered" = "member";
+        if (!memberData?.length) {
+          const { data: guestData, error: guestError } = await supabase
+            .from("static_guests")
+            .select("user_id")
+            .eq("user_id", authData.user.id)
+            .limit(1);
+          if (guestError) throw guestError;
+          currentAccess = guestData?.length ? "guest" : "unregistered";
+        }
+        if (active) setAccess(currentAccess);
+        if (currentAccess === "unregistered") {
+          // 登録前のユーザーには活動情報を取得しない。
+          if (active) {
+            setActivities([]);
+            setPreparations([]);
+            setNow(current);
+          }
+          return;
         }
         const { data, error: activityError } = await supabase
           .from("activity_events")
@@ -156,6 +178,7 @@ export default function Home() {
       return;
     }
     setAuthUser(null);
+    setAccess("signed-out");
     window.location.assign("/login");
   }
 
@@ -227,6 +250,18 @@ export default function Home() {
             </div>
           </div>
         </header>
+        {access === "unregistered" && (
+          <section className="rounded-xl border border-amber-700 bg-amber-950/30 p-5" role="status">
+            <h2 className="text-lg font-bold text-amber-200">初回登録が必要です</h2>
+            <p className="mt-2 text-sm text-slate-200">プロフィール画面で固定メンバーのポジションを選ぶか、閲覧専用ゲストとして登録してください。</p>
+            <Link href="/profile" className="mt-4 inline-block rounded-lg bg-cyan-600 px-4 py-2 font-bold text-white hover:bg-cyan-500">登録画面へ進む →</Link>
+          </section>
+        )}
+        {access === "guest" && (
+          <section className="rounded-xl border border-slate-700 bg-slate-900 p-4 text-sm text-slate-200" role="status">
+            ゲストとしてログイン中です。活動情報は閲覧できますが、出欠回答や活動予定の編集はできません。
+          </section>
+        )}
         <section className="grid gap-4 md:grid-cols-3">
           {[["メンバー", "8人"], ["基本活動時間", "21:30〜翌00:30"], ["活動対象", "全曜日"]].map(([label, value]) => (
             <div key={label} className="rounded-xl border border-slate-800 bg-slate-900 p-5">
@@ -243,8 +278,8 @@ export default function Home() {
                 <h3 className="text-xl font-bold text-cyan-300">日程調整</h3>
                 <span className="text-2xl text-cyan-400 transition group-hover:translate-x-1">→</span>
               </div>
-              <p className="mt-3 text-sm leading-relaxed text-slate-300">自分の参加可能日を回答・変更できます。管理者はほかのメンバーの回答も編集できます。</p>
-              <p className="mt-5 font-bold text-cyan-400">回答を入力・編集する</p>
+              <p className="mt-3 text-sm leading-relaxed text-slate-300">{access === "guest" ? "ゲストは日程を閲覧できます。回答の変更はできません。" : "自分の参加可能日を回答・変更できます。管理者はほかのメンバーの回答も編集できます。"}</p>
+              <p className="mt-5 font-bold text-cyan-400">{access === "guest" ? "日程を確認する" : "回答を入力・編集する"}</p>
             </Link>
             <Link href="/schedule/overview" className="group rounded-xl border border-slate-700 bg-slate-900 p-6 transition hover:border-cyan-400 hover:bg-slate-800">
               <div className="flex items-center justify-between gap-3">

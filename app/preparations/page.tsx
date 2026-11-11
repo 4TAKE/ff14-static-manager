@@ -58,6 +58,8 @@ export default function PreparationsPage() {
   const [preparations, setPreparations] = useState<Preparation[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [authorized, setAuthorized] = useState(false);
+  const [isGuest, setIsGuest] = useState(false);
+  const [needsRegistration, setNeedsRegistration] = useState(false);
   const [selectedId, setSelectedId] = useState("");
   const [form, setForm] = useState<FormValues>(EMPTY_FORM);
   const [editing, setEditing] = useState(false);
@@ -83,7 +85,27 @@ export default function PreparationsPage() {
           .select("user_id, is_admin");
         if (memberError) throw memberError;
         const member = (memberData ?? []).find((m) => m.user_id === authData.user.id);
-        if (!member) throw new Error("固定メンバーとして登録されていません。");
+        let guest = false;
+        if (!member) {
+          const { data: guestData, error: guestError } = await supabase
+            .from("static_guests")
+            .select("user_id")
+            .eq("user_id", authData.user.id)
+            .maybeSingle();
+          if (guestError) throw guestError;
+          guest = Boolean(guestData);
+        }
+        if (!member && !guest) {
+          if (active) {
+            setAuthorized(false);
+            setNeedsRegistration(true);
+            setIsGuest(false);
+            setIsAdmin(false);
+            setEvents([]);
+            setPreparations([]);
+          }
+          return;
+        }
 
         const [eventsResult, preparationsResult] = await Promise.all([
           supabase.from("activity_events")
@@ -99,7 +121,9 @@ export default function PreparationsPage() {
         const loadedEvents = (eventsResult.data ?? []) as ActivityEvent[];
         setEvents(loadedEvents);
         setPreparations((preparationsResult.data ?? []) as Preparation[]);
-        setIsAdmin(member.is_admin === true);
+        setIsAdmin(member?.is_admin === true);
+        setIsGuest(guest);
+        setNeedsRegistration(false);
         setAuthorized(true);
         setSelectedId((current) =>
           loadedEvents.some((event) => event.id === current)
@@ -109,6 +133,8 @@ export default function PreparationsPage() {
       } catch (err) {
         if (!active) return;
         setAuthorized(false);
+        setIsAdmin(false);
+        setIsGuest(false);
         setError(err instanceof Error ? err.message : "読み込みに失敗しました。");
       } finally {
         if (active) setLoading(false);
@@ -261,6 +287,19 @@ export default function PreparationsPage() {
             {error}
           </div>
         )}
+        {!loading && needsRegistration && (
+          <section className="rounded-xl border border-amber-800 bg-amber-950/30 p-5">
+            <p className="text-amber-200">固定メンバーまたはゲストとしての登録が必要です。</p>
+            <Link href="/profile" className="mt-3 inline-block font-bold text-cyan-400 underline hover:text-cyan-300">
+              プロフィールから登録する →
+            </Link>
+          </section>
+        )}
+        {!loading && authorized && isGuest && (
+          <p className="rounded-xl border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">
+            ゲストとして閲覧中です。予習・攻略資料の登録、編集、削除はできません。
+          </p>
+        )}
         {notice && (
           <div role="status" className="rounded-xl border border-emerald-800 bg-emerald-950/30 p-4 text-emerald-300">
             {notice}
@@ -271,7 +310,9 @@ export default function PreparationsPage() {
           <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
             <h2 className="text-xl font-bold">確定済みの活動日がありません</h2>
             <p className="mt-3 text-slate-300">
-              先に回答一覧ページで活動日を確定してください。
+              {isAdmin
+                ? "先に回答一覧ページで活動日を確定してください。"
+                : "管理者が活動日を確定すると、ここに予習・攻略資料が表示されます。"}
             </p>
             <Link href="/schedule/overview" className="mt-4 inline-block text-cyan-400 hover:underline">
               メンバー回答一覧へ →

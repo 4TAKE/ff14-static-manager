@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 const supabase = createClient();
@@ -45,6 +46,8 @@ useEffect(() => {
 }, []);
   const [members, setMembers] = useState<StaticMember[]>([]);
   const [myMember, setMyMember] = useState<StaticMember | null>(null);
+  const [accessType, setAccessType] = useState<"member" | "guest" | "unregistered" | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [selectedRole, setSelectedRole] = useState("MT");
   const [answers, setAnswers] = useState<Answers>({});
   const [loading, setLoading] = useState(true);
@@ -64,7 +67,7 @@ useEffect(() => {
   const firstDay = new Date(year, monthIndex, 1).getDay();
 
   const isAdmin = myMember?.is_admin === true;
-  const canEdit = isAdmin || myMember?.role === selectedRole;
+  const canEdit = accessType === "member" && (isAdmin || myMember?.role === selectedRole);
 
   const getKey = (day: number, role: string) =>
     `${formatDate(year, monthIndex, day)}-${role}`;
@@ -107,26 +110,43 @@ useEffect(() => {
           (member) => member.user_id === authData.user.id
         );
 
-        if (!mine) {
-          throw new Error("固定メンバーとして登録されていません。");
-        }
-
         if (!active) return;
 
+        if (mine) {
+          setMembers(list);
+          setMyMember(mine);
+          setSelectedRole(mine.role);
+          setAccessType("member");
+          setAuthReady(true);
+          return;
+        }
+
+        const { data: guestData, error: guestError } = await supabase
+          .from("static_guests")
+          .select("user_id")
+          .eq("user_id", authData.user.id)
+          .maybeSingle();
+
+        if (guestError) throw guestError;
+        if (!active) return;
+
+        setMyMember(null);
         setMembers(list);
-        setMyMember(mine);
-        setSelectedRole(mine.role);
+        setAccessType(guestData ? "guest" : "unregistered");
+        setAuthReady(true);
+        if (!guestData) setLoading(false);
       } catch (err) {
         if (active) {
           setError(
             err instanceof Error ? err.message : "認証に失敗しました。"
           );
           setLoading(false);
+          setAuthReady(false);
         }
       }
     }
 
-    initialize();
+    void initialize();
 
     return () => {
       active = false;
@@ -135,7 +155,7 @@ useEffect(() => {
 
   // 月ごとの回答を取得
   const loadAnswers = useCallback(async () => {
-    if (!myMember) return;
+    if (!authReady || accessType === "unregistered") return;
 
     const currentRequest = ++requestId.current;
     setLoading(true);
@@ -177,17 +197,17 @@ useEffect(() => {
         setLoading(false);
       }
     }
-  }, [myMember, members, year, monthIndex, daysInMonth]);
+  }, [authReady, accessType, members, year, monthIndex, daysInMonth]);
 
   useEffect(() => {
-    if (!myMember) return;
+    if (!authReady || accessType === "unregistered") return;
 
     void loadAnswers();
 
     return () => {
       requestId.current++;
     };
-  }, [myMember, loadAnswers]);
+  }, [authReady, accessType, loadAnswers]);
 
   function changeMonth(offset: number) {
     if (saving) return;
@@ -337,12 +357,21 @@ useEffect(() => {
     </a>
   </div>
 </header>
+        {accessType === "unregistered" && (
+          <section className="rounded-xl border border-amber-700 bg-amber-950/30 p-5">
+            <h2 className="text-lg font-bold text-amber-200">初回登録が必要です</h2>
+            <p className="mt-2 text-sm text-slate-300">プロフィール画面から担当ポジション、またはゲストを選択してください。</p>
+            <Link href="/profile" className="mt-4 inline-block rounded-lg bg-cyan-600 px-4 py-3 font-bold hover:bg-cyan-500">プロフィールで登録する →</Link>
+          </section>
+        )}
+
+        {authReady && accessType !== "unregistered" && (
         <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <p className="text-sm text-slate-400">ログイン中のメンバー</p>
+          <p className="text-sm text-slate-400">{accessType === "guest" ? "閲覧中のアカウント" : "ログイン中のメンバー"}</p>
 
           <div className="mt-2 flex items-center gap-3">
             <span className="text-xl font-bold">
-              {myMember?.display_name ?? "確認中"}
+              {accessType === "guest" ? "ゲスト" : myMember?.display_name ?? "確認中"}
             </span>
             {isAdmin && (
               <span className="rounded-lg bg-amber-500/20 px-3 py-1 text-sm text-amber-300">
@@ -365,7 +394,7 @@ useEffect(() => {
               setSelectedRole(e.target.value);
               setSelectedDay(null);
             }}
-            disabled={!isAdmin || saving || loading}
+            disabled={accessType !== "guest" && (!isAdmin || saving || loading)}
             className="w-full rounded-lg border border-slate-700 bg-slate-800 p-3 text-base disabled:opacity-60 md:w-72"
           >
             {ROLES.map((role) => (
@@ -374,11 +403,14 @@ useEffect(() => {
           </select>
 
           <p className="mt-3 text-sm text-slate-400">
-            {isAdmin
-              ? "管理者は全員の回答を代理入力できます。"
-              : "自分の回答のみ編集できます。"}
+            {accessType === "guest"
+              ? "ゲストは閲覧専用です。表示するポジションを切り替えられますが、回答の編集はできません。"
+              : isAdmin
+                ? "管理者は全員の回答を代理入力できます。"
+                : "自分の回答のみ編集できます。"}
           </p>
         </section>
+        )}
 
         {error && (
           <div role="alert" className="rounded-lg border border-rose-800 bg-rose-950/40 p-4 text-sm text-rose-300">
@@ -392,6 +424,7 @@ useEffect(() => {
           </div>
         )}
 
+        {authReady && accessType !== "unregistered" && (
         <section className="rounded-xl border border-slate-800 bg-slate-900 p-4 md:p-6">
           <div className="mb-6 flex items-center justify-between gap-3">
             <button
@@ -452,9 +485,10 @@ useEffect(() => {
             ))}
           </div>
         </section>
+        )}
 
         {/* 回答選択ダイアログ */}
-        {selectedDay !== null && (
+        {selectedDay !== null && canEdit && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
             role="presentation"
@@ -526,10 +560,13 @@ useEffect(() => {
           </div>
         )}
 
+        {authReady && accessType !== "unregistered" && (
         <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <h2 className="text-lg font-bold">回答方法</h2>
+          <h2 className="text-lg font-bold">{accessType === "guest" ? "閲覧方法" : "回答方法"}</h2>
           <p className="mt-3 text-sm text-slate-300">
-            日付を選択し、○・×・未定から回答を選んで確定してください。
+            {accessType === "guest"
+              ? "ポジションを切り替えて各メンバーの回答を確認できます。ゲストは回答を変更できません。"
+              : "日付を選択し、○・×・未定から回答を選んで確定してください。"}
           </p>
           <p className="mt-2 text-sm text-slate-400">
             回答はSupabaseに保存されます。8人全員が○になると緑色の枠で強調されます。
@@ -538,6 +575,7 @@ useEffect(() => {
             「—」は未回答、「未定」は回答済みで予定が決まっていない状態です。
           </p>
         </section>
+        )}
       </div>
     </main>
   );

@@ -43,6 +43,8 @@ export default function ActivityCalendarPage() {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [selected, setSelected] = useState<ActivityEvent | null>(null);
   const [authorized, setAuthorized] = useState(false);
+  const [isGuest, setIsGuest] = useState(false);
+  const [accessHint, setAccessHint] = useState<"login" | "register" | null>(null);
   const [todayKey, setTodayKey] = useState("");
 
   const year = month.getFullYear();
@@ -61,9 +63,13 @@ export default function ActivityCalendarPage() {
     setLoading(true);
     setError("");
     setSelected(null);
+    setAccessHint(null);
     try {
       const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData.user) throw new Error("Discordでログインしてください。");
+      if (authError || !authData.user) {
+        if (!signal.cancelled) setAccessHint("login");
+        throw new Error("Discordでログインしてください。");
+      }
 
       const { data: members, error: memberError } = await supabase
         .from("static_members")
@@ -72,7 +78,20 @@ export default function ActivityCalendarPage() {
       const isMember = ((members ?? []) as Member[]).some(
         (member) => member.user_id === authData.user.id
       );
-      if (!isMember) throw new Error("固定メンバーとして登録されていません。");
+      let guest = false;
+      if (!isMember) {
+        const { data: guestData, error: guestError } = await supabase
+          .from("static_guests")
+          .select("user_id")
+          .eq("user_id", authData.user.id)
+          .maybeSingle();
+        if (guestError) throw guestError;
+        guest = Boolean(guestData);
+        if (!guest) {
+          if (!signal.cancelled) setAccessHint("register");
+          throw new Error("初回登録が必要です。プロフィールからポジションまたはゲストを選択してください。");
+        }
+      }
 
       const start = dateKey(year, monthIndex, 1);
       const end = dateKey(year, monthIndex, daysInMonth);
@@ -85,11 +104,13 @@ export default function ActivityCalendarPage() {
       if (eventError) throw eventError;
       if (!signal.cancelled) {
         setAuthorized(true);
+        setIsGuest(guest);
         setEvents((data ?? []) as ActivityEvent[]);
       }
     } catch (err) {
       if (!signal.cancelled) {
         setAuthorized(false);
+        setIsGuest(false);
         setEvents([]);
         setError(err instanceof Error ? err.message : "予定の読み込みに失敗しました。");
       }
@@ -156,8 +177,20 @@ export default function ActivityCalendarPage() {
           )}
         </section>
 
+        {!loading && authorized && isGuest && (
+          <p className="rounded-xl border border-cyan-800 bg-cyan-950/30 p-4 text-sm text-cyan-200">ゲストとして閲覧中です。活動予定は閲覧専用です。</p>
+        )}
         {loading && <p className="text-center text-cyan-400">活動予定を読み込み中...</p>}
-        {error && <p role="alert" className="rounded-xl border border-rose-800 bg-rose-950/40 p-4 text-rose-300">{error}</p>}
+        {error && (
+          <div role="alert" className="rounded-xl border border-rose-800 bg-rose-950/40 p-4 text-rose-300">
+            <p>{error}</p>
+            {accessHint && (
+              <Link href={accessHint === "login" ? "/login" : "/profile"} className="mt-3 inline-block rounded-lg bg-cyan-700 px-4 py-2 font-bold text-white hover:bg-cyan-600">
+                {accessHint === "login" ? "Discordでログインする" : "プロフィールで初回登録する"}
+              </Link>
+            )}
+          </div>
+        )}
 
         {!loading && authorized && (
           <>
